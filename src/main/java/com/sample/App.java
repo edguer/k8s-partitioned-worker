@@ -11,6 +11,7 @@ import org.apache.commons.pool2.impl.GenericObjectPoolConfig;
 
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisPool;
+import redis.clients.jedis.JedisPoolConfig;
 
 /**
  * Entrypoint for the application.
@@ -69,11 +70,13 @@ public class App {
          */
         ScheduledExecutorService executor = Executors.newScheduledThreadPool(2);
 
-        JedisPool connectionPool = new JedisPool(new GenericObjectPoolConfig<>(), args[0]);
+        JedisPoolConfig poolConfig = new JedisPoolConfig();
+        poolConfig.setMaxTotal(128);
+        JedisPool connectionPool = new JedisPool(poolConfig, args[0]);
 
-        int lockTTL = 1;
+        int lockTTL = 5;
         int lockCheckTime = 100;
-        int lockRenewTime = 800;
+        int lockRenewTime = 1000;
         int lockAttemptTimeout = 30000;
 
         int delayBetweenRuns = 5000;

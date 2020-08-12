@@ -64,9 +64,8 @@ public class WorkerProcess extends java.util.TimerTask {
         Jedis connection = connectionPool.getResource();
 
         // Builds and configures the distributed locker class
-        Logger.getGlobal().log(Level.INFO, "Acquiring lock for {0}", partition);
         DistributedLocker locker = new DistributedLocker("partition-" + partition, workerName, lockTTL, lockCheckTime,
-                lockRenewTime, connection);
+                lockRenewTime, connectionPool);
 
         // Tries to acquire the lock
         boolean lockAcquired = false;
@@ -80,7 +79,7 @@ public class WorkerProcess extends java.util.TimerTask {
 
         // Ends the process if unable to acquire the lock
         if (!lockAcquired) {
-            Logger.getGlobal().log(Level.SEVERE, "Got time out while trying to acquired lock on partition {0}",
+            Logger.getGlobal().log(Level.WARNING, "Got time out while trying to acquired lock on partition {0}",
                     partition);
             return;
         }
