@@ -4,7 +4,7 @@ This is an example on how to build a partitioned batch worker for a Kubernetes c
 
 ## Problem statement
 
-Suppose a continuous batch worker should be built on top of a single data set in the same data source, for example: make data transformation over a database table, or picking up scheduled items in the cache. Running a single instance of that worker would be simple enough, but only one record at a time could be processed. Multi-threading will definitely help, but how can it be scaled to more than one server? Now suppose your worker is able to process 500 transactions per second in a single host, and you want to increase it to 1,000 TPS. Logic says adding one more worker would do, but then they would be processing the same data set at the same time, which will end up in concurrency problems or duplicated processing, with potentially no gain.
+Suppose a continuous batch worker should be built on top of a single data set in the same data source, for example: make data transformation over a database table, or picking up scheduled items in the cache. Running a single instance of that worker would be simple enough, but only one record at a time could be processed. Multi-threading will definitely help, but how can it be scaled to more than one server? Now suppose your worker is able to process 500 transactions per second in a single host, and you want to increase it to 1,000 TPS. Logic says adding one more worker would do, but then they would be processing the same data set at the same time, which will end up with a concurrency problems or duplicated processing, with potentially no gain.
 
 If using a message broker, the problem could be solved in the broker itself (such as Kafka partitions), but as the current scenario doesn't include the use of a queue or topic, there is nothing between the worker and the database to know what data that worker should process.
 
@@ -14,7 +14,7 @@ The solution was to create multiple replicas of the worker and make each of them
 
 ## Demand Surge
 
-Unfortunately, the pattern does not deal with a sudden rise in the number of items for a specific partition, meaning the performance level for that partition will bump into the worker's compute resources.
+Unfortunately, the pattern does not deal with a sudden rise in the number of items for a specific partition, meaning the performance level for that partition will bump into the worker's compute resources. 
 
 ## Failover
 
@@ -25,13 +25,13 @@ For example, let's say we have a couple of workers:
 - worker1, primary partition: 1, secondary partition: 2, host: server1
 - worker2, primary partition: 2, secondary partition: 1, host: server2
 
-In a regular, healthy environment, worker1 will always process partition 1, and worker2 always processes partition 2. Now suppose the server2 goes down. What must happen is that worker1 will take both partition 1 and 2, and, as soon as worker2 comes back online, it starts processing the partition 2 again, so worker1 can release partition 2 and focus only on partition 1.
+In a regular, healthy environment, worker1 will always process partition 1, and worker2 always processes partition 2. Now suppose server2 goes down. What must happen is that worker1 will take both partition 1 and 2, and, as soon as worker2 comes back online, it starts processing partition 2 again, so worker1 can release partition 2 and focus only on partition 1.
 
-However, how worker1 knows that worker2 stopped processing those items? Seems like RPC communication would solve it, but it would mean more complexity, exposing ports, standing up tiny RPC server threads (with gRPC, let's say), but turns out there is a better solution if a shared memory cluster is at hand (such as Memcache or Redis): building a distributed locking system.
+However, how is worker1 to know that worker2 stopped processing those items? Seems like RPC communication would solve it, but it would mean more complexity, exposing ports, standing up tiny RPC server threads (with gRPC, let's say), but turns out there is a better solution if a shared memory cluster is at hand (such as Memcache or Redis): building a distributed locking system.
 
 ### Failover and Locking
 
-The idea is simple: mimic a regular multi-thread locking mechanism (```lock``` keyword for C#, ```synchronized``` in java or any Mutex implementation) on a distributed cross-process, cross-server system. That way, worker1 would acquire a persistent lock over partition 1, and worker2 over partition 2. In turn, worker1 will continuously try to acquire a short-lived lock on partition 2. Worker2 will never release the lock on partition 2, only if the server goes down. In that case, as the worker1 is constant trying to get the lock on partition 2, it will soon acquire the lock, process it and release the lock as soon as possible, so that whenever the worker2 comes back online, the lock will be released for it to acquire a persistent lock again.
+The idea is simple: mimic a regular multi-thread locking mechanism (```lock``` keyword for C#, ```synchronized``` in java or any Mutex implementation) on a distributed cross-process, cross-server system. That way, worker1 would acquire a persistent lock over partition 1, and worker2 over partition 2. In turn, worker1 will continuously try to acquire a short-lived lock on partition 2. Worker2 will never release the lock on partition 2 unless it goes down. In that case, as the worker1 is constantly trying to get the lock on partition 2, it will soon acquire the lock, process it and release the lock as soon as possible, so that whenever worker2 comes back online, the lock will be released for it to acquire a persistent lock again.
 
 ### Distributed Locker Implementation
 
@@ -64,7 +64,7 @@ k8s-partitioned-worker-0 immediately takes over partition 2, so now it is proces
 
 ## Code & Solution
 
-It is a Java Maven project, so the source files are located under /src folder, with the pom.xml file in the root. For simplicity and readability, there is no layer separation, so all classes are located under /src/main/java/com/sample. Here is the class list:
+This is a Java Maven project, so the source files are located under /src folder, with the pom.xml file in the root. For simplicity and readability, there is no layer separation, so all classes are located under /src/main/java/com/sample. Here is the class list:
 
 - App.java: application entrypoint, starts Redis connection and kicks-off the worker threads.
 - WorkerProcess.java: the worker timer task, where the worker logic resides.
@@ -84,8 +84,7 @@ To run it, just use the following command line:
 ```bash
 mvn clean package exec:java  -Dexec.args="localhost"
 ```
-
-Change "localhost" to your Redis cluster address. Notice that the solution relies on a StatefulSet host name, meaning it should end with "-[a number]" (e.g.: worker-1), and it will fail if that pattern is not followed. If your host name doesn't use that pattern, just change the App.java file, but don't forget to revert the changes before deploying it to Kubernetes.
+*Change "localhost" to your Redis cluster address. Notice that the solution relies on a StatefulSet host name, meaning it should end with "-[a number]" (e.g.: worker-1), and it will fail if that pattern is not followed. If your host name doesn't use that pattern, just change the App.java file, but don't forget to revert the changes before deploying it to Kubernetes.*
 
 ## Deployment
 
