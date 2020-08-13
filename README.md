@@ -84,7 +84,7 @@ To run it, just use the following command line:
 ```bash
 mvn clean package exec:java  -Dexec.args="localhost"
 ```
-*Change "localhost" to your Redis cluster address. Notice that the solution relies on a StatefulSet host name, meaning it should end with "-[a number]" (e.g.: worker-1), and it will fail if that pattern is not followed. If your host name doesn't use that pattern, just change the App.java file, but don't forget to revert the changes before deploying it to Kubernetes.*
+*Change "localhost" to your Redis cluster address. Notice that the solution relies on a StatefulSet host name, meaning it should end with "-[a number]" (e.g.: worker-1), and it will fail if that pattern is not followed. If your host name doesn't use that pattern,set an emvironment variable named PARTITION_HOSTNAME with the desired hostname (e.g. host-1) which should be used by the app.*
 
 ## Deployment
 
