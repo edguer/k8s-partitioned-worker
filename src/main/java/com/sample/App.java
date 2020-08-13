@@ -25,7 +25,12 @@ public class App {
          * appends the StatefulSet pod name at the and, with a dash before it. Example:
          * myapp-0, myapp-1 and so on.
          */
+        // If environment variable PARTITION_HOSTNAME is set then use that as the HOSTNAME (helps with local testing)
+        String partitionHostName = System.getenv("PARTITION_HOSTNAME");
         String hostName = InetAddress.getLocalHost().getHostName();
+        if (partitionHostName != null) {
+            hostName = partitionHostName;
+        }
         String[] hostNameFragments = hostName.split("-");
         if (hostNameFragments.length <= 1) {
             Logger.getGlobal().severe("Could not infer partition from host name.");
