@@ -1,0 +1,4 @@
+namespace: "k8s-partitioned-worker"
+imageName: ""
+replicas: 2
+redis_host: "redis.k8s-partitioned-worker.svc.cluster.local"
