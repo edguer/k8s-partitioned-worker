@@ -1,6 +1,6 @@
 # Kubernetes Partitioned Worker with Redis
 
-This is an example on how to build a partitioned batch worker for a Kubernetes cluster.
+This is an example on how to build a partitioned batch worker for a Kubernetes cluster in Java with Redis.
 
 ## Problem statement
 
@@ -27,7 +27,7 @@ For example, let's say we have a couple of workers:
 
 In a regular, healthy environment, worker1 will always process partition 1, and worker2 always processes partition 2. Now suppose the server2 goes down. What must happen is that worker1 will take both partition 1 and 2, and, as soon as worker2 comes back online, it starts processing the partition 2 again, so worker1 can release partition 2 and focus only on partition 1.
 
-However, how worker1 knows that worker2 stopped processing those items? Seems like RPC communication would solve it, but it would mean more complexity, exposing ports, standing up tiny RPC server threads (with gRPC, let's say), but turns out there is better solution if a shared memory cluster is at hand (such as Memcache or Redis): building a distributed locking system.
+However, how worker1 knows that worker2 stopped processing those items? Seems like RPC communication would solve it, but it would mean more complexity, exposing ports, standing up tiny RPC server threads (with gRPC, let's say), but turns out there is a better solution if a shared memory cluster is at hand (such as Memcache or Redis): building a distributed locking system.
 
 ### Failover and Locking
 
@@ -35,14 +35,79 @@ The idea is simple: mimic a regular multi-thread locking mechanism (```lock``` k
 
 ### Distributed Locker Implementation
 
-The distributed locker algorithm implementation reference can be found [here](https://redislabs.com/ebook/part-2-core-concepts/chapter-6-application-components-in-redis/6-2-distributed-locking/6-2-3-building-a-lock-in-redis/).
+The distributed locker algorithm implementation reference can be found [here](https://redislabs.com/ebook/part-2-core-concepts/chapter-6-application-components-in-redis/6-2-distributed-locking/6-2-3-building-a-lock-in-redis/). Notice that the implementation only works on a single master Redis deployment. For a multi-master locking algorithm, see the Redlock approach [here](https://redis.io/topics/distlock).
 
 ## Kubernetes Deployment
 
 We opted to use a Kubernetes StatefulSet, since it gives each POD a fixed name (example: worker-0, worker-1 etc) which can be used to infer the partition name. A Cronjob could be used, however we would need to have one Cronjob, with a different name, per partition - with Helm it could be done dynamically, but the StatefulSets seem to be better suited.
 
+## Working example
+
+Running the solution, we expect 3 things to happen:
+1. In a healthy environment, each worker only processes its primary partition data.
+2. If a worker goes down, someone takes over its partition.
+3. When a worker comes back online, it takes back the ownership of the partition.
+
+This first image shows the condition 1:
+
+![Condition 1](./img/running.png)
+
+k8s-partitioned-worker-0 is primarily concerned about partition 1, and k8s-partitioned-worker-1 about partition 2. Both are only processing their corresponding primary partition. Notice they are getting timeout while trying to acquire the lock on the secondary partition: that is expected, since that partition will never be released, as long as all the pods are healthy.
+
+The picture below illustrates what happens when k8s-partitioned-worker-1 gets deleted (kubectl delete pod):
+
+![Condition 2](./img/worker-1-stopped.png)
+
+k8s-partitioned-worker-0 immediately takes over partition 2, so now it is processing both partitions. After sometime, when k8s-partitioned-worker-1 comes back online, k8s-partitioned-worker-0 releases partition 2 and life comes back to normal:
+
+![Condition 3](./img/worker-1-after-stopped.png)
+
 ## Code & Solution
+
+It is a Java Maven project, so the source files are located under /src folder, with the pom.xml file in the root. For simplicity and readability, there is no layer separation, so all classes are located under /src/main/java/com/sample. Here is the class list:
+
+- App.java: application entrypoint, starts Redis connection and kicks-off the worker threads.
+- WorkerProcess.java: the worker timer task, where the worker logic resides.
+- DistributedLocker.java: Redis locker implementation.
+- DistributedLockerException.java: generic locker exception.
+
+For a production-ready code, we recommend the use of separated layers for business logic (service classes or domain models) and data access (repository, data mapper and so on), and, of course, removing the hard-coded configurations.
 
 ## Build & Run
 
+To run the application locally, the following dependencies are required:
+- Java 12 or newer
+- Maven 3 or newer
+- Redis cluster up and running (could be local)
+
+To run it, just use the following command line:
+```bash
+mvn clean package exec:java  -Dexec.args="localhost"
+```
+
+Change "localhost" to your Redis cluster address. Notice that the solution relies on a StatefulSet host name, meaning it should end with "-[a number]" (e.g.: worker-1), and it will fail if that pattern is not followed. If your host name doesn't use that pattern, just change the App.java file, but don't forget to revert the changes before deploying it to Kubernetes.
+
 ## Deployment
+
+The solution is prepared for a Kubernetes deployment, so 2 steps should be taken to run it in a cluster.
+
+### 1. Build and push image
+
+After building the solution with maven, the Docker image should be built. Of course, you will need Docker for it:
+
+```bash
+docker build -t k8s-partitioned-worker .
+```
+
+Next step is to push the image to your private repository (e.g.: Azure Container Registry). 
+
+### 2. Deploy Helm Chart
+
+Before moving on, make sure your Kubernetes cluster is attached to your private registry. For a Azure Kubernetes Service, you can easily do that by running ```az aks update -n [cluster name] -g [rg name] --attach-acr [acr name]```. If you don't have that alternative, a change in the Kubernetes deployment template may be necessary (for adding a secret reference for image pulling), so go on and change the ./helm-chart/templates/statefulset.yml.
+
+As the solution uses a Helm chart, Helm 3 or above should be installed in your local environment. After that, connect your kubectl to the cluster and run the following command in the root folder of the project:
+
+```bash
+helm upgrade --install --set imageName=[registry address]/[image name from step 1] k8s-partitioned-worker ./helm-chart/
+```
+
